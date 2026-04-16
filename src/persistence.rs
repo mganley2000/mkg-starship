@@ -1,5 +1,6 @@
 //! Persist top scores: `localStorage` on WASM, file on native.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 use chrono::{Local, TimeZone};

@@ -11,6 +11,10 @@ bevy = { version = "0.18.1", default-features = false, features = [
     "2d",
     "web",
     "png",
+    "audio",
+    "wav",
+    "vorbis",
+    "mp3",
 ] }
 rand = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }

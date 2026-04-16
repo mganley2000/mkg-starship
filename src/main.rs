@@ -1,5 +1,6 @@
 //! Starship lander — Bevy 2D (native + WASM).
 
+mod ambient_music;
 mod ambient_vfx;
 mod camera;
 mod collision;
@@ -13,6 +14,7 @@ mod physics;
 mod planets;
 mod ship;
 mod terrain;
+mod thrust_audio;
 mod ui;
 
 use bevy::prelude::*;
@@ -39,8 +41,10 @@ fn main() {
         )
         .add_plugins((
             camera::CameraPlugin,
+            ambient_music::AmbientMusicPlugin,
             ambient_vfx::AmbientVfxPlugin,
             game_flow::GameFlowPlugin,
+            thrust_audio::ThrustAudioPlugin,
             landing_dust::LandingDustPlugin,
             crash_explosion::CrashExplosionPlugin,
             exhaust::ExhaustPlugin,
