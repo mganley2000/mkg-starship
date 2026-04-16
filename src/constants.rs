@@ -29,6 +29,9 @@ pub const THRUST_SIDE: f32 = 360.0;
 /// Max delta time (seconds) for one physics integration step — avoids huge jumps after a hitch.
 pub const MAX_PHYSICS_DT: f32 = 0.05;
 
+/// Height above terrain (SI) within which landing dust is spawned (see `landing_dust`).
+pub const LANDING_DUST_ALTITUDE_METERS: f32 = 1.0;
+
 /// Methane units per second while any thruster is active.
 pub const FUEL_BURN_RATE: f32 = 28.0;
 pub const INITIAL_FUEL: f32 = 200.0;
@@ -37,14 +40,52 @@ pub const INITIAL_FUEL: f32 = 200.0;
 pub const SAFE_LANDING_VY: f32 = 220.0;
 pub const SAFE_LANDING_VX: f32 = 120.0;
 
-/// Base score per successful landing.
-pub const SCORE_BASE_LANDING: i32 = 500;
+/// Landing score: faster times (lower seconds) yield more points: `NUMERATOR / (t + FLOOR)`.
+pub const SCORE_TIME_NUMERATOR: f32 = 900.0;
+pub const SCORE_TIME_FLOOR_SEC: f32 = 0.35;
+/// Landing score: fuel fraction (0–1) × this value.
+pub const SCORE_FUEL_MULTIPLIER: f32 = 480.0;
+/// Bonus per landing: `round(10 × gravity_acceleration(body))` (see `planets::gravity_acceleration`).
+pub const SCORE_GRAVITY_BONUS_MUL: f32 = 10.0;
+
+/// Points for one successful landing: faster elapsed time and more fuel yield more; plus gravity bonus.
+#[inline]
+pub fn compute_landing_score(land_time_sec: f32, fuel_remaining: f32, gravity_acceleration: f32) -> i32 {
+    let t = land_time_sec.max(0.01);
+    let time_pts = (SCORE_TIME_NUMERATOR / (t + SCORE_TIME_FLOOR_SEC)) as i32;
+    let fuel_frac = (fuel_remaining / INITIAL_FUEL).clamp(0.0, 1.0);
+    let fuel_pts = (fuel_frac * SCORE_FUEL_MULTIPLIER) as i32;
+    let grav_pts = (SCORE_GRAVITY_BONUS_MUL * gravity_acceleration + 0.5).floor() as i32;
+    time_pts + fuel_pts + grav_pts
+}
 
 /// Terrain mesh extends down to this y (must stay below the lowest surface point).
 pub const TERRAIN_FLOOR_Y: f32 = -WORLD_HEIGHT * 0.78;
 
 /// Number of terrain samples along x (more samples → sharper local corners).
 pub const TERRAIN_SAMPLES: usize = 140;
+
+/// Earth: water table height = min(surface y) + this × (max − min) of the heightfield; valleys below fill with water.
+pub const EARTH_WATER_TABLE_FRAC: f32 = 0.40;
+pub const EARTH_WATER_RGB: (f32, f32, f32) = (0.12, 0.42, 0.78);
+pub const EARTH_WATER_ALPHA: f32 = 0.88;
+
+/// Single background parallax: random heightfield (no pads). World Y offset, z depth, alpha × terrain tint.
+/// Smoothing pass count for parallax = `ceil(primary_smoothing_passes × this)` (50% more passes → ~50% smoother).
+pub const TERRAIN_PARALLAX_SMOOTHING_MULT: f32 = 1.5;
+/// Multiplies the sine layer frequencies (11, 27, 53, 91) for parallax only — lower = fewer peaks across the width.
+pub const TERRAIN_PARALLAX_SIN_FREQ_SCALE: f32 = 0.40;
+/// Scales per-sample noise amplitude for parallax (main terrain uses full `noise_half`).
+pub const TERRAIN_PARALLAX_NOISE_SCALE: f32 = 0.52;
+/// Scales micro-spike probability and amplitude for parallax vs main terrain profile.
+pub const TERRAIN_PARALLAX_MICRO_PROB_SCALE: f32 = 0.28;
+pub const TERRAIN_PARALLAX_MICRO_AMP_SCALE: f32 = 0.55;
+
+pub const TERRAIN_PARALLAX_FAR_Y: f32 = 275.0;
+/// Parallax mesh fill bottom in **local** space. Must be ≤ `WORLD_VIEW_BOTTOM_Y - TERRAIN_PARALLAX_FAR_Y` so the layer still covers the viewport bottom after the parallax transform (otherwise a horizontal seam appears above the screen edge).
+pub const TERRAIN_PARALLAX_MESH_FLOOR_Y: f32 = WORLD_VIEW_BOTTOM_Y - TERRAIN_PARALLAX_FAR_Y;
+pub const TERRAIN_PARALLAX_FAR_Z: f32 = -0.26;
+pub const TERRAIN_PARALLAX_FAR_ALPHA: f32 = 0.032;
 
 /// Starting height for the ship (center y).
 pub fn ship_spawn_y() -> f32 {

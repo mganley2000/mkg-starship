@@ -41,19 +41,20 @@ flowchart LR
 
 ## Planets and gravity
 
-Nine planets in solar-system order; gravity uses representative **m/s²** values scaled into game units (see `planets.rs` / `physics`).
+Bodies in progression order (planets and moons); gravity uses representative **m/s²** values scaled into game units (see `planets.rs` / `physics`).
 
 | Phase | Body    | Gravity (m/s²) |
 | ----- | ------- | ---------------- |
 | 1     | Mercury | 3.70             |
 | 2     | Venus   | 8.87             |
 | 3     | Earth   | 9.81             |
-| 4     | Mars    | 3.71             |
-| 5     | Jupiter | 24.79            |
-| 6     | Saturn  | 10.44            |
-| 7     | Uranus  | 8.69             |
-| 8     | Neptune | 11.15            |
-| 9     | Pluto   | 0.62             |
+| 4     | Moon    | 1.62             |
+| 5     | Mars    | 3.71             |
+| 6     | Jupiter | 24.79            |
+| 7     | Saturn  | 10.44            |
+| 8     | Uranus  | 8.69             |
+| 9     | Neptune | 11.15            |
+| 10    | Pluto   | 0.62             |
 
 **Terrain**: `terrain_profile_for(planet)` in `terrain.rs` — **Saturn** and **Uranus** use lower high-frequency amplitudes, less noise, and post-smoothing passes; other bodies use the jagged rocky profile with small per-planet tweaks.
 

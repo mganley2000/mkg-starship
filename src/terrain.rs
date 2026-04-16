@@ -8,7 +8,14 @@ use bevy::prelude::*;
 use rand::Rng;
 use rand::rngs::StdRng;
 
-use crate::constants::{TERRAIN_FLOOR_Y, TERRAIN_SAMPLES, WORLD_WIDTH};
+use crate::constants::{
+    EARTH_WATER_ALPHA, EARTH_WATER_RGB, EARTH_WATER_TABLE_FRAC, TERRAIN_FLOOR_Y,
+    TERRAIN_PARALLAX_FAR_ALPHA, TERRAIN_PARALLAX_FAR_Y, TERRAIN_PARALLAX_FAR_Z,
+    TERRAIN_PARALLAX_MESH_FLOOR_Y,
+    TERRAIN_PARALLAX_MICRO_AMP_SCALE, TERRAIN_PARALLAX_MICRO_PROB_SCALE,
+    TERRAIN_PARALLAX_NOISE_SCALE, TERRAIN_PARALLAX_SIN_FREQ_SCALE, TERRAIN_PARALLAX_SMOOTHING_MULT,
+    TERRAIN_SAMPLES, WORLD_WIDTH,
+};
 use crate::planets::CelestialBody;
 
 /// Tunable terrain shape for a body (heightfield before pads).
@@ -102,6 +109,12 @@ pub fn terrain_profile_for(body: CelestialBody) -> TerrainProfile {
             p
         }
         CelestialBody::Earth => TerrainProfile::rocky_default(),
+        CelestialBody::Moon => {
+            let mut p = TerrainProfile::rocky_default();
+            p.base -= 10.0;
+            p.micro_spike_prob += 0.025;
+            p
+        }
         CelestialBody::Mars => {
             let mut p = TerrainProfile::rocky_default();
             p.base -= 12.0;
@@ -160,6 +173,18 @@ pub struct VolcanoVent {
 
 #[derive(Component)]
 pub struct TerrainRoot;
+
+/// All terrain visuals for this level (main + parallax); despawn together on transition.
+#[derive(Component)]
+pub struct TerrainStack;
+
+/// Background parallax silhouette (single far layer).
+#[derive(Component)]
+pub struct TerrainParallaxLayer;
+
+/// Child mesh: blue water fill between terrain surface and the Earth water table (see `spawn_terrain_entity`).
+#[derive(Component)]
+pub struct EarthWaterFill;
 
 /// Height of terrain top at world x (linear between samples).
 pub fn terrain_height_at(terrain: &Terrain, x: f32) -> f32 {
@@ -321,7 +346,10 @@ pub fn is_on_pad(terrain: &Terrain, x: f32, foot_y: f32, tolerance: f32) -> Opti
     None
 }
 
-/// Random terrain with `pad_count` flat regions (2–3), shaped by `body`.
+/// Random terrain shaped by `body`.
+///
+/// * `pad_count == 0` — parallax / background only: **no** landing pads, volcanoes, or Enceladus plumes (fully organic hills).
+/// * `pad_count >= 2` — gameplay terrain with `pad_count.clamp(2, 3)` flat pads.
 pub fn generate_terrain(rng: &mut StdRng, pad_count: usize, body: CelestialBody) -> Terrain {
     let profile = terrain_profile_for(body);
     let half = WORLD_WIDTH * 0.5;
@@ -330,17 +358,40 @@ pub fn generate_terrain(rng: &mut StdRng, pad_count: usize, body: CelestialBody)
     let n = TERRAIN_SAMPLES;
     let step = (x_max - x_min) / (n - 1) as f32;
 
+    let is_parallax = pad_count == 0;
+    let sin_f = if is_parallax {
+        TERRAIN_PARALLAX_SIN_FREQ_SCALE
+    } else {
+        1.0
+    };
+    let nh = profile.noise_half * if is_parallax {
+        TERRAIN_PARALLAX_NOISE_SCALE
+    } else {
+        1.0
+    };
+    let micro_p = (profile.micro_spike_prob * if is_parallax {
+        TERRAIN_PARALLAX_MICRO_PROB_SCALE
+    } else {
+        1.0
+    })
+    .clamp(0.0, 1.0) as f64;
+    let micro_h = profile.micro_spike_half * if is_parallax {
+        TERRAIN_PARALLAX_MICRO_AMP_SCALE
+    } else {
+        1.0
+    };
+
     let mut ys: Vec<f32> = Vec::with_capacity(n);
     let a = profile.sin_amp;
     for i in 0..n {
         let t = i as f32 / (n - 1) as f32;
-        let wobble = (t * PI * 11.0).sin() * a[0]
-            + (t * PI * 27.0).sin() * a[1]
-            + (t * PI * 53.0).sin() * a[2]
-            + (t * PI * 91.0).sin() * a[3];
-        let noise = rng.gen_range(-profile.noise_half..profile.noise_half);
-        let micro = if rng.gen_bool(profile.micro_spike_prob as f64) {
-            rng.gen_range(-profile.micro_spike_half..profile.micro_spike_half)
+        let wobble = (t * PI * 11.0 * sin_f).sin() * a[0]
+            + (t * PI * 27.0 * sin_f).sin() * a[1]
+            + (t * PI * 53.0 * sin_f).sin() * a[2]
+            + (t * PI * 91.0 * sin_f).sin() * a[3];
+        let noise = rng.gen_range(-nh..nh);
+        let micro = if rng.gen_bool(micro_p) {
+            rng.gen_range(-micro_h..micro_h)
         } else {
             0.0
         };
@@ -348,30 +399,36 @@ pub fn generate_terrain(rng: &mut StdRng, pad_count: usize, body: CelestialBody)
         ys.push(y);
     }
 
-    let pad_count = pad_count.clamp(2, 3);
+    let n_pads = if pad_count == 0 {
+        0
+    } else {
+        pad_count.clamp(2, 3)
+    };
     let mut pads = Vec::new();
     let margin = WORLD_WIDTH * 0.12;
-    for _ in 0..pad_count {
-        let px0 = rng.gen_range((x_min + margin)..(x_max - margin - 140.0));
-        let width = rng.gen_range(90.0..140.0);
-        let px1 = (px0 + width).min(x_max - margin);
-        let i0 = (((px0 - x_min) / step).round() as usize).min(n - 2);
-        let i1 = (((px1 - x_min) / step).round() as usize)
-            .max(i0 + 2)
-            .min(n - 1);
-        let flat_y = rng.gen_range(profile.pad_y_min..profile.pad_y_max);
-        for idx in i0..=i1 {
-            ys[idx] = flat_y;
+    if n_pads > 0 {
+        for _ in 0..n_pads {
+            let px0 = rng.gen_range((x_min + margin)..(x_max - margin - 140.0));
+            let width = rng.gen_range(90.0..140.0);
+            let px1 = (px0 + width).min(x_max - margin);
+            let i0 = (((px0 - x_min) / step).round() as usize).min(n - 2);
+            let i1 = (((px1 - x_min) / step).round() as usize)
+                .max(i0 + 2)
+                .min(n - 1);
+            let flat_y = rng.gen_range(profile.pad_y_min..profile.pad_y_max);
+            for idx in i0..=i1 {
+                ys[idx] = flat_y;
+            }
+            pads.push(LandingPad {
+                x_min: x_min + i0 as f32 * step,
+                x_max: x_min + i1 as f32 * step,
+                y_top: flat_y,
+            });
         }
-        pads.push(LandingPad {
-            x_min: x_min + i0 as f32 * step,
-            x_max: x_min + i1 as f32 * step,
-            y_top: flat_y,
-        });
     }
 
     let mut volcano_flats: Vec<(LandingPad, f32)> = Vec::new();
-    if body == CelestialBody::Io {
+    if n_pads > 0 && body == CelestialBody::Io {
         if let Some(z) = try_flatten_volcano_zone(
             rng,
             x_min,
@@ -386,7 +443,7 @@ pub fn generate_terrain(rng: &mut StdRng, pad_count: usize, body: CelestialBody)
             volcano_flats.push(z);
         }
     }
-    if body == CelestialBody::Mercury {
+    if n_pads > 0 && body == CelestialBody::Mercury {
         let want = rng.gen_range(1..=2);
         for _ in 0..want {
             let existing: Vec<LandingPad> = volcano_flats.iter().map(|(p, _)| *p).collect();
@@ -410,7 +467,13 @@ pub fn generate_terrain(rng: &mut StdRng, pad_count: usize, body: CelestialBody)
         .map(|i| Vec2::new(x_min + i as f32 * step, ys[i]))
         .collect();
 
-    for _ in 0..profile.smoothing_passes {
+    let smoothing_passes = if n_pads == 0 {
+        ((profile.smoothing_passes as f32) * TERRAIN_PARALLAX_SMOOTHING_MULT).ceil() as u32
+    } else {
+        profile.smoothing_passes
+    };
+
+    for _ in 0..smoothing_passes {
         let copy = points.clone();
         for i in 1..points.len() - 1 {
             let x = points[i].x;
@@ -449,7 +512,7 @@ pub fn generate_terrain(rng: &mut StdRng, pad_count: usize, body: CelestialBody)
     }
 
     // Fallback if placement failed (very crowded random layout): slope placement.
-    if body == CelestialBody::Io && terrain.io_volcano.is_none() {
+    if n_pads > 0 && body == CelestialBody::Io && terrain.io_volcano.is_none() {
         let vx = pick_x_avoiding_pads(rng, x_min, x_max, &terrain.pads, 50.0);
         let vy = terrain_height_at(&terrain, vx);
         terrain.io_volcano = Some(VolcanoVent {
@@ -457,7 +520,7 @@ pub fn generate_terrain(rng: &mut StdRng, pad_count: usize, body: CelestialBody)
             height_scale: random_volcano_height_scale(rng),
         });
     }
-    if body == CelestialBody::Mercury && terrain.mercury_volcanoes.is_empty() {
+    if n_pads > 0 && body == CelestialBody::Mercury && terrain.mercury_volcanoes.is_empty() {
         let vx = pick_x_avoiding_pads(rng, x_min, x_max, &terrain.pads, 50.0);
         let vy = terrain_height_at(&terrain, vx);
         terrain.mercury_volcanoes.push(VolcanoVent {
@@ -466,7 +529,7 @@ pub fn generate_terrain(rng: &mut StdRng, pad_count: usize, body: CelestialBody)
         });
     }
 
-    if body == CelestialBody::Enceladus {
+    if n_pads > 0 && body == CelestialBody::Enceladus {
         let n_plumes = rng.gen_range(2..=3);
         for _ in 0..n_plumes {
             let px = pick_x_avoiding_pads(rng, x_min, x_max, &terrain.pads, 42.0);
@@ -478,17 +541,94 @@ pub fn generate_terrain(rng: &mut StdRng, pad_count: usize, body: CelestialBody)
     terrain
 }
 
-pub fn build_terrain_mesh(terrain: &Terrain) -> Mesh {
+/// Horizontal water surface height for Earth from the generated surface heightfield.
+pub fn earth_water_table_y(terrain: &Terrain) -> f32 {
+    let mut ymin = f32::INFINITY;
+    let mut ymax = f32::NEG_INFINITY;
+    for p in &terrain.points {
+        ymin = ymin.min(p.y);
+        ymax = ymax.max(p.y);
+    }
+    let span = (ymax - ymin).max(8.0);
+    ymin + EARTH_WATER_TABLE_FRAC * span
+}
+
+/// Quads from terrain surface up to `water_y` wherever the surface lies below the water table.
+pub fn build_earth_water_mesh(terrain: &Terrain, water_y: f32) -> Option<Mesh> {
     let pts = &terrain.points;
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
+    let mut push_quad = |xa: f32, ya: f32, xb: f32, yb: f32| {
+        if (ya - water_y).abs() < 1e-4 && (yb - water_y).abs() < 1e-4 {
+            return;
+        }
+        let base = positions.len() as u32;
+        positions.push([xa, ya, 0.0]);
+        positions.push([xb, yb, 0.0]);
+        positions.push([xb, water_y, 0.0]);
+        positions.push([xa, water_y, 0.0]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    };
+
     for w in pts.windows(2) {
+        let x0 = w[0].x;
+        let y0 = w[0].y;
+        let x1 = w[1].x;
+        let y1 = w[1].y;
+        let dy = y1 - y0;
+
+        if dy.abs() < 1e-6 {
+            if y0 < water_y {
+                push_quad(x0, y0, x1, y1);
+            }
+            continue;
+        }
+
+        if y0 < water_y && y1 < water_y {
+            push_quad(x0, y0, x1, y1);
+        } else if y0 < water_y && y1 >= water_y {
+            let t = (water_y - y0) / dy;
+            let xc = x0 + t * (x1 - x0);
+            push_quad(x0, y0, xc, water_y);
+        } else if y0 >= water_y && y1 < water_y {
+            let t = (water_y - y0) / dy;
+            let xc = x0 + t * (x1 - x0);
+            push_quad(xc, water_y, x1, y1);
+        }
+    }
+
+    if positions.is_empty() {
+        return None;
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        VertexAttributeValues::Float32x3(positions),
+    );
+    mesh.insert_indices(Indices::U32(indices));
+    Some(mesh)
+}
+
+pub fn build_terrain_mesh(terrain: &Terrain) -> Mesh {
+    build_terrain_mesh_from_points(&terrain.points, TERRAIN_FLOOR_Y)
+}
+
+/// `mesh_floor_y` is the bottom of the filled quad strip (typically [`TERRAIN_FLOOR_Y`]; parallax uses [`TERRAIN_PARALLAX_MESH_FLOOR_Y`] so the layer reaches the bottom of the view after Y offset).
+pub fn build_terrain_mesh_from_points(points: &[Vec2], mesh_floor_y: f32) -> Mesh {
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    for w in points.windows(2) {
         let p0 = w[0];
         let p1 = w[1];
         let base = positions.len() as u32;
-        positions.push([p0.x, TERRAIN_FLOOR_Y, 0.0]);
-        positions.push([p1.x, TERRAIN_FLOOR_Y, 0.0]);
+        positions.push([p0.x, mesh_floor_y, 0.0]);
+        positions.push([p1.x, mesh_floor_y, 0.0]);
         positions.push([p1.x, p1.y, 0.0]);
         positions.push([p0.x, p0.y, 0.0]);
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -512,17 +652,66 @@ pub fn spawn_terrain_entity(
     materials: &mut Assets<ColorMaterial>,
     terrain: &Terrain,
     body: CelestialBody,
+    rng: &mut StdRng,
     fade_in_from_invisible: bool,
 ) -> Entity {
-    let mesh = build_terrain_mesh(terrain);
-    let a = if fade_in_from_invisible { 0.0 } else { 1.0 };
     let (r, g, b) = body.terrain_surface_rgb();
-    commands
+    let fade = |base: f32| {
+        if fade_in_from_invisible {
+            0.0
+        } else {
+            base
+        }
+    };
+
+    // Organic heightfield (no pads); shifted up for a distant silhouette.
+    let far_bg = generate_terrain(rng, 0, body);
+    let far_mesh = build_terrain_mesh_from_points(&far_bg.points, TERRAIN_PARALLAX_MESH_FLOOR_Y);
+
+    commands.spawn((
+        TerrainStack,
+        TerrainParallaxLayer,
+        Mesh2d(meshes.add(far_mesh)),
+        MeshMaterial2d(materials.add(Color::srgba(
+            r,
+            g,
+            b,
+            fade(TERRAIN_PARALLAX_FAR_ALPHA),
+        ))),
+        Transform::from_translation(Vec3::new(0.0, TERRAIN_PARALLAX_FAR_Y, TERRAIN_PARALLAX_FAR_Z)),
+    ));
+
+    let mesh = build_terrain_mesh(terrain);
+    let a = fade(1.0);
+    let terrain_entity = commands
         .spawn((
             TerrainRoot,
+            TerrainStack,
             Mesh2d(meshes.add(mesh)),
             MeshMaterial2d(materials.add(Color::srgba(r, g, b, a))),
             Transform::default(),
         ))
-        .id()
+        .id();
+
+    if body == CelestialBody::Earth {
+        let water_y = earth_water_table_y(terrain);
+        if let Some(water_mesh) = build_earth_water_mesh(terrain, water_y) {
+            let (wr, wg, wb) = EARTH_WATER_RGB;
+            let water_a = if fade_in_from_invisible {
+                0.0
+            } else {
+                EARTH_WATER_ALPHA
+            };
+            commands.entity(terrain_entity).with_children(|parent| {
+                parent.spawn((
+                    EarthWaterFill,
+                    Mesh2d(meshes.add(water_mesh)),
+                    MeshMaterial2d(materials.add(Color::srgba(wr, wg, wb, water_a))),
+                    Transform::from_translation(Vec3::new(0.0, 0.0, 0.07)),
+                ));
+            });
+        }
+    }
+
+    terrain_entity
 }

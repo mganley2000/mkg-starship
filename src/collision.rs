@@ -3,11 +3,12 @@
 use bevy::prelude::*;
 
 use crate::constants::{
-    LEVEL_GROUND_TOLERANCE, SAFE_LANDING_VX, SAFE_LANDING_VY, SCORE_BASE_LANDING,
+    compute_landing_score, LEVEL_GROUND_TOLERANCE, SAFE_LANDING_VX, SAFE_LANDING_VY,
     SHIP_FOOT_OFFSET_Y, SHIP_HULL_HALF_WIDTH, TERRAIN_FLOOR_Y, TERRAIN_TUNNEL_CRASH_DEPTH,
     WORLD_VIEW_BOTTOM_Y,
 };
-use crate::game_flow::{CrashEvent, LandedOnPad, Score};
+use crate::game_flow::{CrashEvent, CurrentBody, LandedOnPad, LevelFlightTimer, Score};
+use crate::planets::gravity_acceleration;
 use crate::ship::{Ship, ship_foot_y, ship_hull_bottom_y, ship_left_foot_x, ship_right_foot_x};
 use crate::terrain::{Terrain, is_on_pad, terrain_height_at, terrain_max_height_in_span};
 
@@ -37,6 +38,8 @@ pub fn ground_contact(
     mut landed: MessageWriter<LandedOnPad>,
     mut crashed: MessageWriter<CrashEvent>,
     mut score: ResMut<Score>,
+    level_timer: Res<LevelFlightTimer>,
+    current_body: Res<CurrentBody>,
 ) {
     let tolerance = 14.0_f32;
 
@@ -106,10 +109,9 @@ pub fn ground_contact(
 
         if on_pad && level {
             if vy.abs() <= SAFE_LANDING_VY && vx.abs() <= SAFE_LANDING_VX {
-                let bonus = ((SAFE_LANDING_VY - vy.abs()) * 0.8
-                    + (SAFE_LANDING_VX - vx.abs()) * 0.3)
-                    .max(0.0) as i32;
-                score.0 += SCORE_BASE_LANDING + bonus;
+                let g = gravity_acceleration(current_body.0);
+                let pts = compute_landing_score(level_timer.elapsed, ship.fuel, g);
+                score.0 += pts;
                 ship.velocity = Vec2::ZERO;
                 landed.write(LandedOnPad {
                     total_score: score.0,

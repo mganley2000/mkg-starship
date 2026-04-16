@@ -7,11 +7,17 @@ use rand::{Rng, SeedableRng};
 use crate::ambient_vfx::{despawn_ambient_vfx, spawn_ambient_vfx};
 use crate::crash_explosion::CrashFx;
 use crate::constants::{
-    INITIAL_FUEL, SHIP_FOOT_OFFSET_Y, SHIP_HULL_BOTTOM_OFFSET_Y, ship_spawn_y,
+    EARTH_WATER_ALPHA, EARTH_WATER_RGB, INITIAL_FUEL, SHIP_FOOT_OFFSET_Y,
+    SHIP_HULL_BOTTOM_OFFSET_Y, TERRAIN_PARALLAX_FAR_ALPHA,
+    ship_spawn_y,
 };
 use crate::planets::CelestialBody;
 use crate::ship::{Ship, ShipRoot};
-use crate::terrain::{Terrain, TerrainRoot, generate_terrain, spawn_terrain_entity};
+use crate::persistence;
+use crate::terrain::{
+    EarthWaterFill, Terrain, TerrainParallaxLayer, TerrainRoot, TerrainStack, generate_terrain,
+    spawn_terrain_entity,
+};
 
 #[derive(States, Clone, Copy, Default, Eq, PartialEq, Hash, Debug)]
 pub enum AppState {
@@ -27,6 +33,9 @@ pub enum AppState {
 /// UI markers for the intro overlay (spawned from `ui.rs`).
 #[derive(Component)]
 pub struct GetReadyRoot;
+
+#[derive(Component)]
+pub struct GetReadyBodyName;
 
 #[derive(Component)]
 pub struct GetReadyText;
@@ -71,6 +80,16 @@ pub enum EndReason {
 #[derive(Resource)]
 pub struct Score(pub i32);
 
+/// Seconds since this level entered [`AppState::Playing`] (resets each level).
+#[derive(Resource)]
+pub struct LevelFlightTimer {
+    pub elapsed: f32,
+}
+
+/// Best runs persisted (see `persistence`); updated when a run ends.
+#[derive(Resource)]
+pub struct HighScores(pub Vec<crate::persistence::HighScoreEntry>);
+
 #[derive(Resource)]
 pub struct CurrentBody(pub CelestialBody);
 
@@ -102,6 +121,8 @@ impl Plugin for GameFlowPlugin {
             .add_message::<LandedOnPad>()
             .add_message::<CrashEvent>()
             .insert_resource(Score(0))
+            .insert_resource(LevelFlightTimer { elapsed: 0.0 })
+            .insert_resource(HighScores(persistence::load_high_scores()))
             .insert_resource(CurrentBody(CelestialBody::ORDER[0]))
             .insert_resource(GameRng(StdRng::from_entropy()))
             .insert_resource(GameEnd {
@@ -119,12 +140,14 @@ impl Plugin for GameFlowPlugin {
             })
             .add_systems(Startup, setup_world)
             .add_systems(OnEnter(AppState::GetReady), reset_intro_timer)
+            .add_systems(OnEnter(AppState::Playing), reset_level_flight_timer)
             .add_systems(OnEnter(AppState::LandingSuccess), reset_success_timer)
             .add_systems(
                 Update,
                 (
                     intro_tick.run_if(in_state(AppState::GetReady)),
                     landing_success_tick.run_if(in_state(AppState::LandingSuccess)),
+                    tick_level_flight_timer.run_if(in_state(AppState::Playing)),
                 ),
             )
             // Ship + collision run in Update (not FixedUpdate) so thrust matches each frame’s
@@ -145,6 +168,14 @@ impl Plugin for GameFlowPlugin {
 
 fn reset_intro_timer(mut timer: ResMut<IntroTimer>) {
     timer.elapsed = 0.0;
+}
+
+fn reset_level_flight_timer(mut timer: ResMut<LevelFlightTimer>) {
+    timer.elapsed = 0.0;
+}
+
+fn tick_level_flight_timer(time: Res<Time>, mut timer: ResMut<LevelFlightTimer>) {
+    timer.elapsed += time.delta_secs();
 }
 
 fn reset_success_timer(mut timer: ResMut<SuccessOverlayTimer>) {
@@ -169,7 +200,7 @@ fn transition_to_next_level(
     rng: &mut GameRng,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
-    terrain_entities: &Query<Entity, With<TerrainRoot>>,
+    terrain_entities: &Query<Entity, With<TerrainStack>>,
     ambient_entities: &Query<Entity, With<crate::ambient_vfx::AmbientVfx>>,
     ship_q: &mut Query<(&mut Ship, &mut Transform), With<ShipRoot>>,
 ) {
@@ -179,7 +210,7 @@ fn transition_to_next_level(
     }
     let pad_count = rng.0.gen_range(2..=3);
     *terrain_res = generate_terrain(&mut rng.0, pad_count, body);
-    spawn_terrain_entity(commands, meshes, materials, terrain_res, body, true);
+    spawn_terrain_entity(commands, meshes, materials, terrain_res, body, &mut rng.0, true);
     spawn_ambient_vfx(commands, terrain_res, body, meshes, materials);
     for (mut ship, mut tf) in ship_q.iter_mut() {
         reset_ship_at_spawn(&mut ship, &mut tf);
@@ -194,7 +225,7 @@ fn landing_success_tick(
     body: Res<CurrentBody>,
     mut rng: ResMut<GameRng>,
     mut commands: Commands,
-    terrain_entities: Query<Entity, With<TerrainRoot>>,
+    terrain_entities: Query<Entity, With<TerrainStack>>,
     ambient_entities: Query<Entity, With<crate::ambient_vfx::AmbientVfx>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
@@ -234,8 +265,13 @@ fn intro_tick(
     current_body: Res<CurrentBody>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     terrain_mat: Query<&MeshMaterial2d<ColorMaterial>, With<TerrainRoot>>,
+    parallax_mat: Query<&MeshMaterial2d<ColorMaterial>, With<TerrainParallaxLayer>>,
+    earth_water_mat: Query<&MeshMaterial2d<ColorMaterial>, With<EarthWaterFill>>,
     mut get_ready_bg: Query<&mut BackgroundColor, With<GetReadyRoot>>,
-    mut get_ready_text: Query<&mut TextColor, With<GetReadyText>>,
+    mut get_ready_intro: ParamSet<(
+        Query<(&mut Text, &mut TextColor), With<GetReadyBodyName>>,
+        Query<&mut TextColor, With<GetReadyText>>,
+    )>,
 ) {
     timer.elapsed += time.delta_secs();
     let t = timer.elapsed;
@@ -265,6 +301,17 @@ fn intro_tick(
             mat.color = Color::srgba(tr, tg, tb, terrain_a);
         }
     }
+    for mat_wrap in &parallax_mat {
+        if let Some(mat) = materials.get_mut(mat_wrap.id()) {
+            mat.color = Color::srgba(tr, tg, tb, terrain_a * TERRAIN_PARALLAX_FAR_ALPHA);
+        }
+    }
+    for mat_wrap in &earth_water_mat {
+        if let Some(mat) = materials.get_mut(mat_wrap.id()) {
+            let (wr, wg, wb) = EARTH_WATER_RGB;
+            mat.color = Color::srgba(wr, wg, wb, terrain_a * EARTH_WATER_ALPHA);
+        }
+    }
 
     // Text + dim overlay
     let text_a = if t < TEXT_IN_START {
@@ -289,7 +336,13 @@ fn intro_tick(
         0.0
     };
 
-    for mut tc in &mut get_ready_text {
+    let name = current_body.0.display_name();
+    for (mut text, mut tc) in get_ready_intro.p0() {
+        text.0.clear();
+        text.0.push_str(name);
+        **tc = Color::srgba(0.88, 0.93, 1.0, text_a);
+    }
+    for mut tc in get_ready_intro.p1() {
         **tc = Color::srgba(1.0, 0.94, 0.72, text_a);
     }
     for mut bg in &mut get_ready_bg {
@@ -317,6 +370,7 @@ fn setup_world(
         &mut materials,
         &terrain_res,
         body.0,
+        &mut rng.0,
         true,
     );
     spawn_ambient_vfx(
@@ -336,10 +390,12 @@ fn handle_ground_events(
     mut body: ResMut<CurrentBody>,
     mut game_end: ResMut<GameEnd>,
     score: Res<Score>,
+    mut high_scores: ResMut<HighScores>,
 ) {
     for _ in crashed.read() {
         game_end.reason = EndReason::Crashed;
         game_end.score = score.0;
+        persistence::merge_and_persist(&mut high_scores.0, score.0);
         next.set(AppState::GameOver);
     }
 
@@ -347,6 +403,7 @@ fn handle_ground_events(
         if body.0 == CelestialBody::Pluto {
             game_end.reason = EndReason::Victory;
             game_end.score = ev.total_score;
+            persistence::merge_and_persist(&mut high_scores.0, ev.total_score);
             next.set(AppState::GameOver);
             continue;
         }
@@ -364,11 +421,12 @@ fn restart_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next: ResMut<NextState<AppState>>,
     mut score: ResMut<Score>,
+    mut high_scores: ResMut<HighScores>,
     mut body: ResMut<CurrentBody>,
     mut terrain_res: ResMut<Terrain>,
     mut rng: ResMut<GameRng>,
     mut commands: Commands,
-    terrain_entities: Query<Entity, With<TerrainRoot>>,
+    terrain_entities: Query<Entity, With<TerrainStack>>,
     ambient_entities: Query<Entity, With<crate::ambient_vfx::AmbientVfx>>,
     crash_fx: Query<Entity, With<CrashFx>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -383,6 +441,7 @@ fn restart_input(
     }
 
     score.0 = 0;
+    high_scores.0 = persistence::load_high_scores();
     body.0 = CelestialBody::ORDER[0];
 
     despawn_ambient_vfx(&mut commands, &ambient_entities);
@@ -401,6 +460,7 @@ fn restart_input(
         &mut materials,
         &terrain_res,
         body.0,
+        &mut rng.0,
         true,
     );
     spawn_ambient_vfx(

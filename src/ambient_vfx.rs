@@ -28,14 +28,14 @@ fn setup_ambient_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) 
 }
 
 /// Local Y of the crater rim (lowest drawn geometry). Nothing extends below this — avoids “leg” corners.
-const VOLCANO_RIM_LOCAL_Y: f32 = 5.0;
+pub const VOLCANO_RIM_LOCAL_Y: f32 = 5.0;
 /// Apex height above the rim (local space, before Y scale).
 const VOLCANO_APEX_LOCAL_Y: f32 = 12.5;
 /// Half-width of the rim arc in local units.
 const VOLCANO_RIM_HALF_W: f32 = 24.0;
 
 /// Smooth caldera dome: wide curved rim + single apex — no sharp bottom corners (no “lander legs”).
-fn volcano_mound_mesh() -> Mesh {
+pub fn volcano_mound_mesh() -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,

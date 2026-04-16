@@ -13,11 +13,13 @@ bevy = { version = "0.18.1", default-features = false, features = [
     "png",
 ] }
 rand = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
 # Required for rand / transitive crates on wasm32-unknown-unknown
 getrandom = { version = "0.2", features = ["js"] }
+web-sys = { version = "0.3", features = ["Window", "Storage"] }
 
 [profile.dev]
 opt-level = 1

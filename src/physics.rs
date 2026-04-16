@@ -6,7 +6,7 @@ use crate::constants::{
     FUEL_BURN_RATE, MAX_PHYSICS_DT, SHIP_FOOT_OFFSET_Y, SHIP_HULL_BOTTOM_OFFSET_Y, WORLD_HEIGHT,
     WORLD_WIDTH, thrust_side_components,
 };
-use crate::planets::{gravity_acceleration, thrust_main};
+use crate::planets::{gravity_acceleration, thrust_main, thrust_multiplier};
 use crate::ship::{Ship, ShipRoot};
 
 pub fn ship_physics(
@@ -19,8 +19,11 @@ pub fn ship_physics(
     let g = gravity_acceleration(current.0);
     let gravity = Vec2::new(0.0, -g);
 
-    let main = thrust_main();
-    let (h_comp, v_comp) = thrust_side_components();
+    let m = thrust_multiplier(current.0);
+    let main = thrust_main() * m;
+    let (h0, v0) = thrust_side_components();
+    let h_comp = h0 * m;
+    let v_comp = v0 * m;
 
     for (mut ship, mut tf) in &mut q {
         ship.foot_prev = tf.translation.y + SHIP_FOOT_OFFSET_Y;

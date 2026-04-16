@@ -1,13 +1,15 @@
 //! HUD: fuel, velocity, planet; game over overlay.
 
 use bevy::prelude::*;
+use bevy::text::prelude::{Justify, TextLayout};
 
 use crate::constants::{INITIAL_FUEL, SAFE_LANDING_VY};
-use crate::planets::game_velocity_to_m_s;
+use crate::planets::{CelestialBody, fuel_display_name, game_velocity_to_m_s};
 use crate::game_flow::{
-    AppState, CurrentBody, EndReason, GameEnd, GetReadyRoot, GetReadyText, SuccessRoot,
-    SuccessText,
+    AppState, CurrentBody, EndReason, GameEnd, GetReadyBodyName, GetReadyRoot, GetReadyText,
+    HighScores, LevelFlightTimer, Score as RunScore, SuccessRoot, SuccessText,
 };
+use crate::persistence::format_high_score_timestamp;
 use crate::ship::Ship;
 use crate::ship::ShipRoot;
 
@@ -24,18 +26,42 @@ struct HudVel;
 struct HudPlanet;
 
 #[derive(Component)]
+struct HudTimer;
+
+#[derive(Component)]
+struct HudRunScore;
+
+#[derive(Component)]
+struct HudGameOverRoot;
+
+#[derive(Component)]
 struct HudGameOver;
+
+#[derive(Component)]
+struct TopScoresRoot;
+
+#[derive(Component)]
+struct TopScoresText;
 
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_hud, spawn_intro_overlay, spawn_success_overlay))
+        app.add_systems(
+                Startup,
+                (
+                    spawn_hud,
+                    spawn_intro_overlay,
+                    spawn_success_overlay,
+                    spawn_top_scores_bar,
+                ),
+            )
             .add_systems(
                 Update,
                 (
                     sync_hud_and_intro_visibility,
                     update_hud.run_if(in_state(AppState::Playing)),
+                    update_top_scores_text,
                     update_game_over_overlay,
                 ),
             );
@@ -52,7 +78,7 @@ fn spawn_hud(mut commands: Commands) {
                 top: Val::Px(12.0),
                 right: Val::Px(12.0),
                 width: Val::Px(300.0),
-                min_height: Val::Px(108.0),
+                min_height: Val::Px(132.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::FlexEnd,
                 row_gap: Val::Px(6.0),
@@ -72,6 +98,24 @@ fn spawn_hud(mut commands: Commands) {
                 TextColor(Color::srgb(0.95, 0.95, 1.0)),
             ));
             p.spawn((
+                HudTimer,
+                Text::new("Time: 0.0 s"),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.85, 0.92, 1.0)),
+            ));
+            p.spawn((
+                HudRunScore,
+                Text::new("Run: 0"),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.92, 0.55)),
+            ));
+            p.spawn((
                 HudFuel,
                 Text::new("Methane: 100%"),
                 TextFont {
@@ -82,7 +126,7 @@ fn spawn_hud(mut commands: Commands) {
             ));
             p.spawn((
                 HudVel,
-                Text::new("Vy:   +0.0 m/s"),
+                Text::new("  +0.0 m/s"),
                 TextFont {
                     font_size: 16.0,
                     ..default()
@@ -91,24 +135,64 @@ fn spawn_hud(mut commands: Commands) {
             ));
         });
 
-    commands.spawn((
-        HudGameOver,
-        Text::new(""),
-        TextFont {
-            font_size: 28.0,
-            ..default()
-        },
-        TextColor(Color::srgb(1.0, 0.85, 0.3)),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(50.0),
-            top: Val::Percent(42.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        Visibility::Hidden,
-    ));
+    commands
+        .spawn((
+            HudGameOverRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            Visibility::Hidden,
+        ))
+        .with_children(|p| {
+            p.spawn((
+                HudGameOver,
+                Text::new(""),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont {
+                    font_size: 28.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.85, 0.3)),
+            ));
+        });
+}
+
+fn spawn_top_scores_bar(mut commands: Commands) {
+    commands
+        .spawn((
+            TopScoresRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                bottom: Val::Px(12.0),
+                width: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                padding: UiRect::horizontal(Val::Px(16.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
+            Visibility::Visible,
+        ))
+        .with_children(|p| {
+            p.spawn((
+                TopScoresText,
+                Text::new("Top scores\n—"),
+                TextFont {
+                    font_size: 15.0,
+                    ..default()
+                },
+                TextColor(Color::srgba(0.82, 0.88, 0.96, 0.95)),
+            ));
+        });
 }
 
 fn spawn_intro_overlay(mut commands: Commands) {
@@ -121,8 +205,10 @@ fn spawn_intro_overlay(mut commands: Commands) {
                 top: Val::Px(0.0),
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
+                row_gap: Val::Px(10.0),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
@@ -130,8 +216,19 @@ fn spawn_intro_overlay(mut commands: Commands) {
         ))
         .with_children(|p| {
             p.spawn((
+                GetReadyBodyName,
+                Text::new(""),
+                TextLayout::new_with_justify(Justify::Center),
+                TextFont {
+                    font_size: 30.0,
+                    ..default()
+                },
+                TextColor(Color::srgba(0.88, 0.93, 1.0, 0.0)),
+            ));
+            p.spawn((
                 GetReadyText,
                 Text::new("Get Ready"),
+                TextLayout::new_with_justify(Justify::Center),
                 TextFont {
                     font_size: 52.0,
                     ..default()
@@ -177,11 +274,14 @@ fn sync_hud_and_intro_visibility(
         Query<&mut Visibility, With<HudRoot>>,
         Query<&mut Visibility, With<GetReadyRoot>>,
         Query<&mut Visibility, With<SuccessRoot>>,
+        Query<&mut Visibility, With<TopScoresRoot>>,
     )>,
 ) {
     let playing = *state.get() == AppState::Playing;
     let get_ready = *state.get() == AppState::GetReady;
     let landing_success = *state.get() == AppState::LandingSuccess;
+    let game_over = *state.get() == AppState::GameOver;
+    let show_top_scores = get_ready || game_over;
 
     for mut v in q.p0() {
         *v = if playing {
@@ -204,10 +304,19 @@ fn sync_hud_and_intro_visibility(
             Visibility::Hidden
         };
     }
+    for mut v in q.p3() {
+        *v = if show_top_scores {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
 }
 
 fn update_hud(
     body: Res<CurrentBody>,
+    level_timer: Res<LevelFlightTimer>,
+    run_score: Res<RunScore>,
     ship: Query<
         &Ship,
         (
@@ -215,20 +324,65 @@ fn update_hud(
             Without<HudPlanet>,
             Without<HudFuel>,
             Without<HudVel>,
+            Without<HudTimer>,
+            Without<HudRunScore>,
             Without<HudGameOver>,
         ),
     >,
     mut fuel_q: Query<
-        &mut Text,
-        (With<HudFuel>, Without<HudVel>, Without<HudPlanet>),
+        (&mut Text, &mut TextColor),
+        (
+            With<HudFuel>,
+            Without<HudVel>,
+            Without<HudPlanet>,
+            Without<HudTimer>,
+            Without<HudRunScore>,
+            Without<HudGameOver>,
+        ),
     >,
     mut vel_q: Query<
         (&mut Text, &mut TextColor),
-        (With<HudVel>, Without<HudFuel>, Without<HudPlanet>),
+        (
+            With<HudVel>,
+            Without<HudFuel>,
+            Without<HudPlanet>,
+            Without<HudTimer>,
+            Without<HudRunScore>,
+            Without<HudGameOver>,
+        ),
     >,
     mut planet_q: Query<
         &mut Text,
-        (With<HudPlanet>, Without<HudFuel>, Without<HudVel>),
+        (
+            With<HudPlanet>,
+            Without<HudFuel>,
+            Without<HudVel>,
+            Without<HudTimer>,
+            Without<HudRunScore>,
+            Without<HudGameOver>,
+        ),
+    >,
+    mut timer_q: Query<
+        &mut Text,
+        (
+            With<HudTimer>,
+            Without<HudPlanet>,
+            Without<HudFuel>,
+            Without<HudVel>,
+            Without<HudRunScore>,
+            Without<HudGameOver>,
+        ),
+    >,
+    mut run_score_q: Query<
+        &mut Text,
+        (
+            With<HudRunScore>,
+            Without<HudPlanet>,
+            Without<HudFuel>,
+            Without<HudVel>,
+            Without<HudTimer>,
+            Without<HudGameOver>,
+        ),
     >,
 ) {
     let Ok(ship) = ship.single() else {
@@ -240,11 +394,25 @@ fn update_hud(
         t.0 = format!("{} ({:.2} m/s^2)", body.0.display_name(), g);
     }
 
-    for mut t in &mut fuel_q {
+    for mut t in &mut timer_q {
+        t.0 = format!("Time: {:.1} s", level_timer.elapsed);
+    }
+    for mut t in &mut run_score_q {
+        t.0 = format!("Score: {}", run_score.0);
+    }
+
+    let fuel_color = if body.0 == CelestialBody::Jupiter {
+        Color::srgb(0.82, 0.62, 1.0)
+    } else {
+        Color::srgb(0.7, 1.0, 0.75)
+    };
+    for (mut t, mut tc) in &mut fuel_q {
         t.0 = format!(
-            "Methane: {:>3.0}%",
+            "{}: {:>3.0}%",
+            fuel_display_name(body.0),
             (ship.fuel / INITIAL_FUEL * 100.0).clamp(0.0, 100.0)
         );
+        **tc = fuel_color;
     }
 
     let vy = ship.velocity.y;
@@ -269,17 +437,52 @@ fn update_hud(
     };
 
     for (mut t, mut tc) in &mut vel_q {
-        t.0 = format!("Vy: {:+7.1} m/s", vy_ms);
+        t.0 = format!("{:+7.1} m/s", vy_ms);
         **tc = vel_color;
     }
+}
+
+fn update_top_scores_text(
+    high_scores: Res<HighScores>,
+    mut q: Query<&mut Text, With<TopScoresText>>,
+) {
+    let Ok(mut text) = q.single_mut() else {
+        return;
+    };
+    let entries: Vec<_> = high_scores
+        .0
+        .iter()
+        .filter(|e| e.score > 0)
+        .take(5)
+        .collect();
+    if entries.is_empty() {
+        text.0 = "Top scores\n(no runs yet)".to_string();
+        return;
+    }
+    let mut s = String::from("Top scores\n");
+    for (i, e) in entries.iter().enumerate() {
+        if let Some(ts) = format_high_score_timestamp(e.unix_secs) {
+            s.push_str(&format!("{}. {}  {}\n", i + 1, e.score, ts));
+        } else {
+            s.push_str(&format!("{}. {}\n", i + 1, e.score));
+        }
+    }
+    if s.ends_with('\n') {
+        s.pop();
+    }
+    text.0 = s;
 }
 
 fn update_game_over_overlay(
     state: Res<State<AppState>>,
     game_end: Res<GameEnd>,
-    mut q: Query<(&mut Text, &mut Visibility), With<HudGameOver>>,
+    mut text_q: Query<&mut Text, With<HudGameOver>>,
+    mut root_vis: Query<&mut Visibility, With<HudGameOverRoot>>,
 ) {
-    let Ok((mut text, mut vis)) = q.single_mut() else {
+    let Ok(mut text) = text_q.single_mut() else {
+        return;
+    };
+    let Ok(mut vis) = root_vis.single_mut() else {
         return;
     };
 

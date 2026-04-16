@@ -7,6 +7,8 @@ mod crash_explosion;
 mod constants;
 mod exhaust;
 mod game_flow;
+mod landing_dust;
+mod persistence;
 mod physics;
 mod planets;
 mod ship;
@@ -39,6 +41,7 @@ fn main() {
             camera::CameraPlugin,
             ambient_vfx::AmbientVfxPlugin,
             game_flow::GameFlowPlugin,
+            landing_dust::LandingDustPlugin,
             crash_explosion::CrashExplosionPlugin,
             exhaust::ExhaustPlugin,
             ui::UiPlugin,
