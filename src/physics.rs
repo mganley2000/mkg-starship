@@ -1,28 +1,30 @@
-//! Gravity, thrusters, integration. Runs in `FixedUpdate` while playing.
+//! Gravity, thrusters, integration. Runs in `Update` while playing (same clock as input).
 
 use bevy::prelude::*;
 
-use crate::constants::{FUEL_BURN_RATE, SHIP_HALF_HEIGHT, WORLD_HEIGHT, WORLD_WIDTH};
-use crate::planets::{gravity_acceleration, thrust_diag, thrust_main};
+use crate::constants::{
+    FUEL_BURN_RATE, MAX_PHYSICS_DT, SHIP_FOOT_OFFSET_Y, SHIP_HULL_BOTTOM_OFFSET_Y, WORLD_HEIGHT,
+    WORLD_WIDTH, thrust_side_components,
+};
+use crate::planets::{gravity_acceleration, thrust_main};
 use crate::ship::{Ship, ShipRoot};
 
 pub fn ship_physics(
-    time: Res<Time<Fixed>>,
+    time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut q: Query<(&mut Ship, &mut Transform), With<ShipRoot>>,
-    current: Res<crate::game_flow::CurrentPlanet>,
+    current: Res<crate::game_flow::CurrentBody>,
 ) {
-    let dt = time.delta_secs();
+    let dt = time.delta_secs().clamp(0.0, MAX_PHYSICS_DT);
     let g = gravity_acceleration(current.0);
     let gravity = Vec2::new(0.0, -g);
 
     let main = thrust_main();
-    let diag = thrust_diag();
-    let d_diag = Vec2::new(1.0, 1.0).normalize() * diag;
-    let d_diag_r = Vec2::new(-1.0, 1.0).normalize() * diag;
+    let (h_comp, v_comp) = thrust_side_components();
 
     for (mut ship, mut tf) in &mut q {
-        ship.foot_prev = tf.translation.y - SHIP_HALF_HEIGHT;
+        ship.foot_prev = tf.translation.y + SHIP_FOOT_OFFSET_Y;
+        ship.hull_bottom_prev = tf.translation.y + SHIP_HULL_BOTTOM_OFFSET_Y;
 
         let mut accel = gravity;
 
@@ -32,12 +34,14 @@ pub fn ship_physics(
                 accel += Vec2::new(0.0, main);
                 burning = true;
             }
-            if keyboard.pressed(KeyCode::KeyZ) {
-                accel += d_diag;
+            // Left-side thruster (←): push ship right + up (counter leftward drift).
+            if keyboard.pressed(KeyCode::ArrowLeft) {
+                accel += Vec2::new(h_comp, v_comp);
                 burning = true;
             }
-            if keyboard.pressed(KeyCode::Slash) {
-                accel += d_diag_r;
+            // Right-side thruster (→): push ship left + up (counter rightward drift).
+            if keyboard.pressed(KeyCode::ArrowRight) {
+                accel += Vec2::new(-h_comp, v_comp);
                 burning = true;
             }
             if burning {

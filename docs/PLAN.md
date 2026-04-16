@@ -28,31 +28,38 @@ flowchart LR
 
 - **State**: Bevy `States` (`AppState`: `Playing`, `GameOver`) so input and physics ignore dead states cleanly.
 - **Physics**: Integrate in **`FixedUpdate`** with constant `dt`. Store **velocity** (`Vec2`) on the ship; each step apply gravity, then thruster accelerations when keys are held and fuel > 0.
-- **Terrain**: Piecewise-linear height profile — ordered `(x, y)` points. Mountains from random walk + noise; **2–3 flat segments** are landing pads.
-- **Collision**: Sample terrain height at ship foot `x`. **Crash** if not on a pad or impact speed too high. **Safe landing** on a pad below speed thresholds → points, refill fuel, next planet (or victory after Mercury).
-- **Rendering**: `Mesh2d` for terrain polygon; `Mesh2d` + `Rectangle` for ship.
+- **Terrain**: Piecewise-linear height profile — ordered `(x, y)` points; profile depends on **planet** (Saturn & Uranus use smoother generation). **2–3 flat segments** are landing pads.
+- **Collision**: Sample terrain height at ship feet. **Crash** if not on a pad or impact speed too high. **Safe landing** on a pad below speed thresholds → points, refill fuel, next planet (or victory after Pluto).
+- **Rendering**: `Mesh2d` for terrain polygon; composite `Mesh2d` for ship.
 
 ## Thrusters and fuel
 
 - **Center** (Arrow Down): thrust straight up — slows descent.
-- **Left** (Z): thrust up-right at 45°.
-- **Right** (Slash `/`): thrust up-left at 45°.
+- **Left** (←): left side thruster (horizontal + vertical).
+- **Right** (→): right side thruster (horizontal + vertical).
 - **Fuel**: Single tank; drains while any thruster fires.
 
 ## Planets and gravity
 
-| Phase | Body    | Gravity (m/s²) |
-| ----- | ------- | -------------- |
-| 1     | Earth   | 9.81           |
-| 2     | Moon    | 1.62           |
-| 3     | Mars    | 3.71           |
-| 4     | Mercury | 3.70           |
+Nine planets in solar-system order; gravity uses representative **m/s²** values scaled into game units (see `planets.rs` / `physics`).
 
-Gravity is applied as **scaled game acceleration** (see `planets.rs` / `constants.rs`).
+| Phase | Body    | Gravity (m/s²) |
+| ----- | ------- | ---------------- |
+| 1     | Mercury | 3.70             |
+| 2     | Venus   | 8.87             |
+| 3     | Earth   | 9.81             |
+| 4     | Mars    | 3.71             |
+| 5     | Jupiter | 24.79            |
+| 6     | Saturn  | 10.44            |
+| 7     | Uranus  | 8.69             |
+| 8     | Neptune | 11.15            |
+| 9     | Pluto   | 0.62             |
+
+**Terrain**: `terrain_profile_for(planet)` in `terrain.rs` — **Saturn** and **Uranus** use lower high-frequency amplitudes, less noise, and post-smoothing passes; other bodies use the jagged rocky profile with small per-planet tweaks.
 
 ## HUD
 
-Upper-right UI: methane (fuel), horizontal and vertical velocity.
+Upper-right UI: methane (fuel), horizontal and vertical velocity, current planet.
 
 ## WASM build
 
@@ -67,7 +74,7 @@ Upper-right UI: methane (fuel), horizontal and vertical velocity.
 | ------------- | ------------------------------------------------- |
 | `main.rs`     | App, plugins, state, wasm panic hook              |
 | `camera.rs`   | Camera / world bounds                             |
-| `terrain.rs`  | Generation, mesh, height queries                  |
+| `terrain.rs`  | Generation, mesh, height queries, planet profiles |
 | `ship.rs`     | Ship component, spawning                          |
 | `physics.rs`  | Gravity, thrusters, integration                   |
 | `collision.rs`| Landing vs crash                                  |
@@ -79,10 +86,10 @@ Upper-right UI: methane (fuel), horizontal and vertical velocity.
 
 - **One crash**: First crash → `GameOver` (failed run).
 - **Points**: Base per landing + bonus for lower speed.
-- **Victory**: Successful landing on Mercury ends the run in a win state.
+- **Victory**: Successful landing on **Pluto** ends the run in a win state.
 
 ## Deliverables
 
 1. Native: `cargo run`
 2. WASM: `cargo build --target wasm32-unknown-unknown --release` + HTTP serve
-3. Playable loop: Earth → Moon → Mars → Mercury; HUD; fuel; three thrusters; procedural terrain with pads; single life.
+3. Playable loop: Mercury → … → Pluto; HUD; fuel; three thrusters; procedural terrain with pads; single life.

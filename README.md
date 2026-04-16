@@ -1,6 +1,6 @@
 # mkg-starship
 
-A small **Rust + Bevy 0.18** 2D lunar-lander style game: procedural terrain with flat landing pads, three thrusters (main + two 45° diagonals), methane fuel, per-body gravity (Earth → Moon → Mars → Mercury), HUD, scoring, and a single crash before game over.
+A small **Rust + Bevy 0.18** 2D lunar-lander style game: procedural terrain with flat landing pads, three thrusters (main + two side thrusters), methane fuel, per-body gravity across **nine planets and six moons** (15 stages from Mercury through Pluto, including Io, Europa, Ganymede, Callisto, Enceladus, and Titan), HUD, scoring, and a single crash before game over.
 
 The design plan lives in [docs/PLAN.md](docs/PLAN.md).
 
@@ -9,8 +9,8 @@ The design plan lives in [docs/PLAN.md](docs/PLAN.md).
 | Input | Action |
 | ----- | ------ |
 | **↓** | Main thruster (up) |
-| **Z** | Left diagonal (up-right) |
-| **/** | Right diagonal (up-left) |
+| **←** | Left side thruster (thrust right + up; counters leftward drift) |
+| **→** | Right side thruster (thrust left + up; counters rightward drift) |
 | **R** | Restart (after game over) |
 
 ## Native (desktop)

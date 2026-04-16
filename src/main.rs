@@ -1,8 +1,11 @@
 //! Starship lander — Bevy 2D (native + WASM).
 
+mod ambient_vfx;
 mod camera;
 mod collision;
+mod crash_explosion;
 mod constants;
+mod exhaust;
 mod game_flow;
 mod physics;
 mod planets;
@@ -34,7 +37,10 @@ fn main() {
         )
         .add_plugins((
             camera::CameraPlugin,
+            ambient_vfx::AmbientVfxPlugin,
             game_flow::GameFlowPlugin,
+            crash_explosion::CrashExplosionPlugin,
+            exhaust::ExhaustPlugin,
             ui::UiPlugin,
         ))
         .run();
